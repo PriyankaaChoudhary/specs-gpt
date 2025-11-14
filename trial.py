@@ -27,8 +27,7 @@ st.set_page_config(
 
 # --- Configuration ---
 DB_DIRECTORY = "chroma_db"
-# EMBEDDING_MODEL = "mxbai-embed-large"
-EMBEDDING_MODEL = "granite-embedding:30m"
+EMBEDDING_MODEL = "mxbai-embed-large"
 GENERATIVE_MODEL = "llama3:8b" # Using llama3:8b, assuming it's available locally
 
 # --- Keywords and Specifications Structure ---

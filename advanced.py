@@ -15,7 +15,6 @@ from langchain.schema.document import Document
 import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 import io
@@ -25,7 +24,6 @@ import gc
 import re
 from typing import List, Dict, Tuple
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-import openpyxl
 from io import BytesIO
 import textwrap
 
@@ -113,7 +111,7 @@ KEYWORDS_AND_SPECS = {
             "specifications": [
                 {"question": "Type of unit finish", "related_terms": "finish type, surface material, laminate type, veneer, paint, coating, construction material, material finish, casework finish, SOLID SURFACE, P-LAM, PLASTIC LAMINATE, HIGH PRESSURE LAMINATE, THERMOFOIL"},
                 {"question": "Color and manufacturer of the finish", "related_terms": "finish color, material supplier, brand, shade, hue, maker, WILSONART, OMNOVA, FORMICA, finish manufacturer, color selection, finish brand"},
-                {"question": "3form material requirements", "related_terms": "3form, translucent panels, resin panels, specific 3form series, Varia, Chroma, Koda, specialty panels, decorative resin"},
+                {"question": "Finish Material requirements", "related_terms": "3form, translucent panels, resin panels, specific 3form series, Varia, Chroma, Koda, specialty panels, decorative resin"},
                 {"question": "Any details related to headwalls in this section", "related_terms": "headwall specifications, architectural integration, mounting details, finishes on headwalls, casework around headwalls, headwall integration"}
             ]
         }
@@ -157,7 +155,7 @@ KEYWORDS_AND_SPECS = {
                 {"question": "What switch types and configurations are required?", "related_terms": "light switch, SPST, 3-way, 4-way, momentary, dimmer, keyed switch"},
                 {"question": "What are the voltage and amperage ratings for receptacles and switches?", "related_terms": "voltage, amperage, 120V, 277V, 15A, 20A, rating"}
             ]
-        },
+        },  
         "26 27 26 - WIRING DEVICES": {
             "keywords": "WIRING DEVICES, TAMPERPROOF, GFCI, HOSPITAL GRADE, RECEPTACLE, SWITCH, HUBBELL, LEVITON, outlets, power receptacles, wall plates, dimmers, electrical outlets, wiring accessories",
             "specifications": [
@@ -300,7 +298,7 @@ def process_and_analyze_pdf(
         
         if all_chunks:
             # Add in batches for better performance
-            batch_size = 100
+            batch_size = 64
             for i in range(0, len(all_chunks), batch_size):
                 batch = all_chunks[i:i+batch_size]
                 vector_store.add_documents(batch)
@@ -324,7 +322,7 @@ def process_and_analyze_pdf(
             template = """You are an expert construction specification analyst and estimator work as an estimator with deep knowledge of headwalls, building codes and standards.
                         Your task is to extract specific data based on the user's question.
 **CRITICAL INSTRUCTIONS:**
-1. Read the ENTIRE CONTEXT carefully and thoroughly. Do not skip any part. Specially realted to Headwalls.
+1. Read the ENTIRE CONTEXT carefully and thoroughly. Do not skip any part. Specially related to Headwalls.
 2. Look for exact matches, partial matches, synonyms, related, sematic and contextual information.
 3. Check for information in tables, lists, notes, and running text.
 4. If you find the information, provide SPECIFIC details asked in questions including:
@@ -333,9 +331,9 @@ def process_and_analyze_pdf(
    - Any relevant standards, codes, or requirements.
 5. Include the page number reference for each finding: [Page X] [Section Y]
 6. If information is found, then only give the information.
-7. Only say "Information not found" if you've thoroughly checked and found nothing relevant.
+7. **Only say "Information not found" if you've thoroughly checked and found nothing relevant.**
 8. Just give me summarized version with page and section and information. Dont repeat content in response.
-9. Do not repeat response and colclude the response.
+9. Do not repeat response and do not conclude the response.
 10. Consider "KEYWORDS" also for retrieval.
 
 
@@ -467,115 +465,198 @@ Provide a concise answer with page reference [Page X] or state "Information not 
     return all_results_flat, timings
 
 # --- PDF Generation Function ---
-def generate_pdf_with_table(report_df, timings_data, config_info, filename_prefix="specification_analysis_report"):
+def generate_pdf_with_table(report_df, timings_data, config_info, source_filename, filename_prefix="specs_analysis_report"):
     """
-    Generates a robust PDF with a table layout. It uses a single row for most
-    items, but intelligently splits exceptionally long content into multiple
-    rows to prevent LayoutErrors, spanning the cells for a clean look.
+    Generates a robust PDF with intelligent text chunking to prevent LayoutErrors.
+    Splits exceptionally long content across multiple rows with proper cell spanning.
     """
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=letter, 
+        leftMargin=inch, 
+        rightMargin=inch, 
+        topMargin=inch, 
+        bottomMargin=inch
+    )
     styles = getSampleStyleSheet()
+    
+    # Create a custom style with smaller font for dense content
+    compact_style = ParagraphStyle(
+        'Compact',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=11,
+        wordWrap='CJK'
+    )
+    
     story = []
 
-    # --- Header, Config, and Performance sections (unchanged) ---
+    # --- Header Section ---
     story.append(Paragraph("Enhanced Specification Analyzer Report", styles["Title"]))
+    
+    # --- NEW: Add the source filename right after the title ---
+    if source_filename:
+        # html.escape is used to prevent errors if the filename has special characters like < or >
+        story.append(Paragraph(f"<b>Source Document:</b> {html.escape(source_filename)}", styles["Normal"]))
     story.append(Spacer(1, 12))
+    
+    # --- Configuration Section ---
     story.append(Paragraph("Analysis Configuration", styles["Heading2"]))
     for key, value in config_info.items():
         story.append(Paragraph(f"<b>{key}:</b> {value}", styles["Normal"]))
     story.append(Spacer(1, 12))
+    
+    # --- Performance Section ---
     story.append(Paragraph("Performance Breakdown", styles["Heading2"]))
     total_time = sum(d for _, d in timings_data)
     for label, duration in timings_data:
         story.append(Paragraph(f"{label}: {duration:.2f} seconds", styles["Normal"]))
     story.append(Paragraph(f"<b>Total Processing Time:</b> {total_time:.2f} seconds", styles["Normal"]))
     story.append(Spacer(1, 12))
+    
     story.append(Paragraph("Analysis Report", styles["Heading2"]))
     story.append(Spacer(1, 12))
 
     if not report_df.empty:
+        # Define column widths
+        col_widths = [1.5*inch, 2.5*inch, 3.5*inch]
+        
+        # Calculate maximum characters per chunk based on available space
+        # Assuming 9pt font with 11pt leading, estimate ~50 lines max per cell
+        MAX_LINES_PER_CELL = 45
+        AVG_CHARS_PER_LINE = 65  # Conservative estimate for 3.5" width
+        MAX_CHARS_PER_CHUNK = MAX_LINES_PER_CELL * AVG_CHARS_PER_LINE
+
         for division, division_df in report_df.groupby("Division", sort=False):
             story.append(Paragraph(f"<b>{division}</b>", styles["Heading3"]))
             story.append(Spacer(1, 6))
 
             table_data = [["Section", "Specification", "Result"]]
-            style_commands = [] # To hold our SPAN commands
+            style_commands = []
 
             for index, row in division_df.iterrows():
-                # Prepare the full result text
-                safe_text = html.escape(row["Result"])
+                # Escape and prepare text
+                safe_text = html.escape(str(row["Result"]))
                 result_text = safe_text.replace('\n', '<br/>')
-
-                # --- HYBRID LOGIC TO PREVENT CRASHES ---
-                # This character limit is a safe guess to prevent a cell from being
-                # taller than a page. 2000 chars is roughly 1/2 to 2/3 of a page.
-                MAX_CHARS_PER_CELL = 2000
                 
-                chunks_for_this_item = []
-                if len(result_text) > MAX_CHARS_PER_CELL:
-                    # If text is too long, split it into safe-sized chunks
-                    temp_text = result_text
-                    while len(temp_text) > 0:
-                        # Find the last space before the limit to avoid breaking words
-                        break_point = temp_text.rfind(' ', 0, MAX_CHARS_PER_CELL)
-                        if break_point == -1: # No spaces found, must hard break
-                            break_point = MAX_CHARS_PER_CELL
-                        chunks_for_this_item.append(temp_text[:break_point])
-                        temp_text = temp_text[break_point:].lstrip()
+                # Calculate how many chunks we need
+                chunks_needed = max(1, len(result_text) // MAX_CHARS_PER_CHUNK + 1)
+                
+                if chunks_needed == 1:
+                    # Simple case: fits in one cell
+                    if "Information not found" in row["Result"]:
+                        result_para = Paragraph(f"<font color='red'>{result_text}</font>", compact_style)
+                    else:
+                        result_para = Paragraph(result_text, compact_style)
+                    
+                    table_data.append([
+                        Paragraph(str(row["Section"]), compact_style),
+                        Paragraph(str(row["Specification"]), compact_style),
+                        result_para
+                    ])
                 else:
-                    # Text is a normal length, keep it as a single chunk
-                    chunks_for_this_item.append(result_text)
-
-                # --- Add the chunks to the table ---
-                start_row_index = len(table_data)
-                is_first_chunk = True
-                for chunk in chunks_for_this_item:
-                     if "Information not found" in row["Result"]:
-                        result_para = Paragraph(
-                        f"<font color='red'>{chunk}</font>",
-                        styles["Normal"]
-                        )
-                     else:
-                        result_para = Paragraph(
-                            chunk,
-                            styles["Normal"]
-                            )
-
-                     if is_first_chunk:
-                         table_data.append([Paragraph(row["Section"], styles["Normal"]), Paragraph(row["Specification"], styles["Normal"]), result_para])
-                         is_first_chunk = False
-                     else:
-                        table_data.append(['', '', result_para])
-                
-                # If we created multiple rows for this item, add SPAN commands
-                if len(chunks_for_this_item) > 1:
+                    # Complex case: need to split across multiple rows
+                    # Use textwrap for intelligent line breaking
+                    wrapped_lines = textwrap.wrap(
+                        result_text,
+                        width=AVG_CHARS_PER_LINE,
+                        break_long_words=True,
+                        break_on_hyphens=True,
+                        replace_whitespace=False
+                    )
+                    
+                    # Group lines into chunks that fit
+                    chunks = []
+                    current_chunk = []
+                    current_length = 0
+                    
+                    for line in wrapped_lines:
+                        line_length = len(line)
+                        if current_length + line_length > MAX_CHARS_PER_CHUNK and current_chunk:
+                            # Start new chunk
+                            chunks.append('<br/>'.join(current_chunk))
+                            current_chunk = [line]
+                            current_length = line_length
+                        else:
+                            current_chunk.append(line)
+                            current_length += line_length
+                    
+                    # Add remaining chunk
+                    if current_chunk:
+                        chunks.append('<br/>'.join(current_chunk))
+                    
+                    # Add first row with all columns
+                    start_row_index = len(table_data)
+                    is_info_not_found = "Information not found" in row["Result"]
+                    
+                    for i, chunk in enumerate(chunks):
+                        if is_info_not_found:
+                            result_para = Paragraph(f"<font color='red'>{chunk}</font>", compact_style)
+                        else:
+                            result_para = Paragraph(chunk, compact_style)
+                        
+                        if i == 0:
+                            # First row: include section and specification
+                            table_data.append([
+                                Paragraph(str(row["Section"]), compact_style),
+                                Paragraph(str(row["Specification"]), compact_style),
+                                result_para
+                            ])
+                        else:
+                            # Subsequent rows: empty cells for section and spec
+                            table_data.append(['', '', result_para])
+                    
+                    # Add span commands for merged cells
                     end_row_index = len(table_data) - 1
-                    style_commands.append(('SPAN', (0, start_row_index), (0, end_row_index)))
-                    style_commands.append(('SPAN', (1, start_row_index), (1, end_row_index)))
-                    # Also vertically align the spanned content to the top
-                    style_commands.append(('VALIGN', (0, start_row_index), (1, end_row_index), 'TOP'))
+                    if end_row_index > start_row_index:
+                        style_commands.append(('SPAN', (0, start_row_index), (0, end_row_index)))
+                        style_commands.append(('SPAN', (1, start_row_index), (1, end_row_index)))
+                        style_commands.append(('VALIGN', (0, start_row_index), (1, end_row_index), 'TOP'))
 
-
+            # Build table if we have data
             if len(table_data) > 1:
-                col_widths = [1.5*inch, 2.5*inch, 3.5*inch]
-                table = Table(table_data, colWidths=col_widths, splitByRow=1)
+                table = Table(
+                    table_data, 
+                    colWidths=col_widths, 
+                    splitByRow=1, 
+                    repeatRows=1
+                )
                 
-                # Base style for the whole table
                 base_style = [
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ADD8E6')),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.black),
                     ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                    ('VALIGN', (0,1), (-1,-1), 'TOP'), # Default VALIGN for all content rows
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
                     ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                    ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#D3D3D3')),
+                    ('FONTSIZE', (0,0), (-1,0), 10),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                    ('TOPPADDING', (0,0), (-1,-1), 4),
+                    ('LEFTPADDING', (0,0), (-1,-1), 4),
+                    ('RIGHTPADDING', (0,0), (-1,-1), 4),
                 ]
-                table.setStyle(TableStyle(base_style + style_commands))
                 
+                table.setStyle(TableStyle(base_style + style_commands))
                 story.append(table)
                 story.append(Spacer(1, 24))
 
-    doc.build(story)
+    try:
+        doc.build(story)
+    except Exception as e:
+        # If build fails, create a simple error report
+        error_buffer = io.BytesIO()
+        error_doc = SimpleDocTemplate(error_buffer, pagesize=letter)
+        error_story = [
+            Paragraph("PDF Generation Error", styles["Title"]),
+            Spacer(1, 12),
+            Paragraph(f"An error occurred while generating the PDF: {str(e)}", styles["Normal"]),
+            Spacer(1, 12),
+            Paragraph("Please try exporting as CSV or Excel instead.", styles["Normal"])
+        ]
+        error_doc.build(error_story)
+        buffer = error_buffer
+    
     pdf = buffer.getvalue()
     buffer.close()
     return pdf
@@ -590,14 +671,14 @@ with st.sidebar:
     st.subheader("Model Settings")
     embedding_model = st.selectbox(
         "Embedding Model",
-        ["mxbai-embed-large","granite-embedding:30m", "nomic-embed-text", "all-minilm"],
+        ["mxbai-embed-large", "nomic-embed-text", "all-minilm"],
         index=0,
         help="Model for converting text to embeddings"
     )
     
     generative_model = st.selectbox(
         "Generative Model",
-        ["llama3:8b","granite3.3:8b", "mistral", "mixtral","gpt-oss"],
+        ["llama3:8b", "mistral", "mixtral","gpt-oss"],
         index=0,
         help="Model for analysis and text generation"
     )
@@ -616,7 +697,7 @@ with st.sidebar:
         "Chunk Overlap",
         min_value=0,
         max_value=500,
-        value=200,
+        value=300,
         step=25,
         help="Overlap between chunks to preserve context"
     )
@@ -635,7 +716,7 @@ with st.sidebar:
         "Rerank Top N",
         min_value=3,
         max_value=15,
-        value=5,
+        value=7,
         step=1,
         help="Number of top chunks after reranking"
     )
@@ -660,7 +741,7 @@ with st.sidebar:
     
     st.divider()
     
-    if st.button("Clear All Temp DBs", use_container_width=True):
+    if st.button("Clear All Temp DBs", width='stretch'):
         clear_parent_chroma_db_directory()
         st.success("Cleared temporary databases")
     
@@ -719,7 +800,7 @@ if uploaded_file is not None:
     if st.button(
         f"Analyze '{uploaded_file.name}'",
         type="primary",
-        use_container_width=True,
+        width='stretch',
         help="Start comprehensive specification analysis"
     ):
         # Clear old DBs
@@ -905,7 +986,7 @@ if st.session_state.report_df is not None and not st.session_state.report_df.emp
                 
                 st.dataframe(
                     styled_df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "Division": st.column_config.TextColumn("Division", width="small"),
@@ -929,7 +1010,7 @@ if st.session_state.report_df is not None and not st.session_state.report_df.emp
             data=csv,
             file_name=f"{uploaded_file.name.replace('.pdf', '')}_analysis.csv",
             mime="text/csv",
-            use_container_width=True
+            width='stretch'
         )
     
     with col2:
@@ -946,10 +1027,10 @@ if st.session_state.report_df is not None and not st.session_state.report_df.emp
                 data=excel_data,
                 file_name=f"{uploaded_file.name.replace('.pdf', '')}_analysis.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width='stretch'
             )
         except ImportError:
-            st.button("Excel Export (Not Available)", disabled=True, use_container_width=True)
+            st.button("Excel Export (Not Available)", disabled=True, width='stretch')
     
     with col3:
         # PDF Download
@@ -958,6 +1039,7 @@ if st.session_state.report_df is not None and not st.session_state.report_df.emp
                 filtered_df,
                 st.session_state.timings,
                 st.session_state.config_info,
+                uploaded_file.name,
                 uploaded_file.name.replace(".pdf", "")
             )
             st.download_button(
@@ -965,7 +1047,7 @@ if st.session_state.report_df is not None and not st.session_state.report_df.emp
                 data=pdf_bytes,
                 file_name=f"{uploaded_file.name.replace('.pdf', '')}_analysis_report.pdf",
                 mime="application/pdf",
-                use_container_width=True
+                width='stretch'
             )
 
 elif st.session_state.report_df is not None and st.session_state.report_df.empty:
